@@ -1,0 +1,53 @@
+{
+  "id": "@ext/attendance-record",
+  "name": "课堂考勤记录",
+  "version": "0.1.0",
+  "main": "index.js",
+  "executionMode": "inline",
+  "description": "学生进入课程时自动记录考勤（年月日/星期/节次/课题/教师/机号/IP），教师端查看班级学期明细与汇总",
+  "author": "OpenLearn",
+  "engines": { "openlearn": ">=0.2.0" },
+  "requires": [
+    "@openlearn/core:ICommandBusService@^1.0.0",
+    "@openlearn/core:IActionRegistryService@^1.0.0",
+    "@openlearn/core:IEventBusService@^1.0.0",
+    "@openlearn/core:IDatabase@^1.0.0"
+  ],
+  "capabilitiesProposed": [
+    "attendance:record",
+    "attendance:read",
+    "attendance:write",
+    "lesson:read",
+    "class:read",
+    "student:read"
+  ],
+  "configuration": {
+    "properties": {
+      "teacher_name": {
+        "type": "string",
+        "default": "",
+        "description": "当前授课教师姓名（为空时回退到课件创建者姓名）"
+      },
+      "semester_name": {
+        "type": "string",
+        "default": "",
+        "description": "当前学期名称，用于汇总页标题，如「2025-2026学年第一学期」"
+      },
+      "period_timetable": {
+        "type": "string",
+        "default": "[{\"period\":1,\"start\":\"08:00\",\"end\":\"08:45\"},{\"period\":2,\"start\":\"08:55\",\"end\":\"09:40\"},{\"period\":3,\"start\":\"10:00\",\"end\":\"10:45\"},{\"period\":4,\"start\":\"10:55\",\"end\":\"11:40\"},{\"period\":5,\"start\":\"14:00\",\"end\":\"14:45\"},{\"period\":6,\"start\":\"14:55\",\"end\":\"15:40\"},{\"period\":7,\"start\":\"16:00\",\"end\":\"16:45\"},{\"period\":8,\"start\":\"16:55\",\"end\":\"17:40\"}]",
+        "description": "作息表 JSON 数组：[{\"period\":1,\"start\":\"08:00\",\"end\":\"08:45\"},...]，用于把课表时间区间映射为第 N 节"
+      },
+      "auto_mark_absent": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否在每节课结束后自动把未记录学生标记为缺勤（建议开启，可随时在明细页手动修正）"
+      },
+      "auto_mark_interval_min": {
+        "type": "integer",
+        "default": 5,
+        "description": "自动缺勤判定扫描间隔（分钟）"
+      }
+    }
+  }
+}
