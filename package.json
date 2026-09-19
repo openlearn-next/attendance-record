@@ -1,6 +1,6 @@
 {
   "name": "openlearn-plugin-attendance-record",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "学生上课考勤记录 - 学生进入课程自动记录年月日/星期/节次/课题/教师/机号/IP，教师端查看班级学期明细与汇总",
@@ -9,7 +9,7 @@
     "build": "openlearn-plugin-sdk build"
   },
   "dependencies": {
-    "@openlearn/plugin-sdk": "^3.4.3"
+    "@openlearn/plugin-sdk": "^3.6.1"
   },
   "peerDependencies": {
     "react": ">=17",
@@ -17,12 +17,8 @@
   },
   "devDependencies": {
     "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
     "esbuild": "^0.24.0",
-    "express": "^5.2.1",
-    "jszip": "^3.10.0",
-    "pino": "^10.3.1",
-    "semver": "^7.8.5",
-    "typescript": "^5.0.0",
-    "uuid": "^14.0.1"
+    "typescript": "^5.0.0"
   }
 }

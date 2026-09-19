@@ -47,7 +47,7 @@ export default {
   manifest: {
     id: PLUGIN_ID,
     name: '课堂考勤记录',
-    version: '0.1.0',
+    version: '0.1.1',
     description: '学生进入课程时自动记录考勤（年月日/星期/节次/课题/教师/机号/IP），教师端查看班级学期明细与汇总',
     author: 'OpenLearn',
     // 推荐 inline 模式：本插件的定时任务（自动缺勤判定）依赖 processManager.registerInterval，
@@ -230,6 +230,18 @@ export default {
       return sch || null;
     }
 
+    // 班级归属：按 class_students 反查（学生可能属于多个班级，取第一条）
+    function resolveClassIdOfStudent(studentId: string): string {
+      try {
+        const row: any = rawDb.prepare(
+          `SELECT class_id FROM class_students WHERE student_id = ? LIMIT 1`
+        ).get(studentId);
+        return row?.class_id || '';
+      } catch {
+        return '';
+      }
+    }
+
     // 机号 / IP：学生固定座位 → 机房布局单元格
     function resolveSeat(classId: string, studentId: string): { machineNo: string; ip: string } {
       try {
@@ -321,7 +333,7 @@ export default {
       rawDb.prepare(`
         INSERT INTO ${T_ATT}
           (id, class_id, lesson_id, schedule_id, student_id, student_name, date, weekday, period_no, time_slot, topic, teacher, machine_no, ip_address, status, recorded_at, source, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(lesson_id, student_id, date) DO UPDATE SET
           class_id = excluded.class_id,
           student_name = excluded.student_name,
@@ -367,7 +379,8 @@ export default {
         const p = (command.payload || {}) as any;
         const lessonId = p.lessonId;
         const studentId = p.studentId;
-        const classId = p.classId || null;
+        // 未显式传班级时按 class_students 反查，避免记录 class_id 为空
+        const classId = p.classId || resolveClassIdOfStudent(studentId) || null;
         if (!lessonId || !studentId) throw new Error('缺少 lessonId 或 studentId');
 
         const now = Date.now();
@@ -423,6 +436,83 @@ export default {
         });
 
         return { recorded: true, already: false, record };
+      },
+    });
+
+    // ── 3b. 课堂在场学生自动签到（教师端代记）──────────────
+    // 由插件前端订阅宿主 presence-update 后调用：把「当前课件在场学生」按
+    // class_students 归属班级写入 present。内部命令，不注册到 actionRegistry。
+    await commandBus.registerHandler('attendance.sync_present', {
+      async execute(command: any) {
+        const p = (command.payload || {}) as any;
+        const lessonId = p.lessonId;
+        const studentIds: string[] = Array.isArray(p.studentIds) ? p.studentIds : [];
+        if (!lessonId) throw new Error('缺少 lessonId');
+        if (studentIds.length === 0) return { synced: 0, skipped: 0, studentIds: [] };
+
+        const now = Date.now();
+        const date = p.date || formatDate(now);
+        const requestedClassId = p.classId || '';
+        const schedule = findSchedule(lessonId, requestedClassId || null, date);
+        const timeSlot = schedule?.time_slot || '';
+        const periodNo = resolvePeriodNo(timeSlot);
+        const teacher = resolveTeacher(lessonId);
+        const topic = topicOf(lessonId);
+
+        const syncedIds: string[] = [];
+        let skipped = 0;
+
+        for (const sid of studentIds) {
+          // 按 class_students 识别：指定班级时必须属于该班级，否则反查其归属班级
+          let classId = requestedClassId;
+          if (classId) {
+            const inClass: any = rawDb.prepare(
+              `SELECT 1 AS ok FROM class_students WHERE class_id = ? AND student_id = ?`
+            ).get(classId, sid);
+            if (!inClass) { skipped++; continue; }
+          } else {
+            classId = resolveClassIdOfStudent(sid);
+          }
+
+          const existing: any = rawDb.prepare(
+            `SELECT id, status, schedule_id, machine_no, ip_address, note FROM ${T_ATT} WHERE lesson_id = ? AND student_id = ? AND date = ?`
+          ).get(lessonId, sid, date);
+          // 已到 / 迟到 / 请假不被自动签到覆盖，仅缺勤反转为已到
+          if (existing && existing.status !== 'absent') continue;
+
+          const machine = resolveSeat(classId, sid);
+          upsertRecord({
+            classId,
+            lessonId,
+            scheduleId: schedule?.id || existing?.schedule_id || '',
+            studentId: sid,
+            studentName: studentNameOf(sid),
+            date,
+            timeSlot,
+            periodNo,
+            topic,
+            teacher,
+            machineNo: machine.machineNo || existing?.machine_no || '',
+            ip: machine.ip || existing?.ip_address || '',
+            status: 'present',
+            source: 'auto',
+            note: existing?.note || '',
+            recordedAt: now,
+          });
+          syncedIds.push(sid);
+        }
+
+        if (syncedIds.length > 0) {
+          await eventBus.publish({
+            id: uid(),
+            type: 'attendance.record_updated',
+            source: `plugin.${pluginId}`,
+            payload: { lessonId, classId: requestedClassId, date, status: 'present', count: syncedIds.length },
+            timestamp: now,
+            correlationId: command.id,
+          });
+        }
+        return { synced: syncedIds.length, skipped, studentIds: syncedIds };
       },
     });
 

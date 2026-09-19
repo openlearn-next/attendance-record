@@ -19,6 +19,89 @@ async function getSession(): Promise<any> {
   }
 }
 
+// ── 教师端：课堂在场学生自动签到 ────────────────────────
+// 宿主的在线状态（presence）只在 socket 上广播、后端订阅不到，且上课态
+// student.view 扩展点不挂载，因此改由教师端代记：订阅 presence-update，把
+// 「当前课件在场学生 ∩ class_students 名册」写入已到。
+interface PresenceSnapshot {
+  onlineStudentIds: string[];
+  activeStudentLessons: Record<string, string>;
+}
+let latestPresence: PresenceSnapshot | null = null;
+let autoSyncTarget: { lessonId: string; classId: string } | null = null;
+const syncedKeys = new Set<string>();
+const syncListeners = new Set<() => void>();
+let lastSyncAt = 0;
+let syncStats = { inLesson: 0, synced: 0, error: '' as string };
+
+function todayStr(): string {
+  const d = new Date();
+  const p = (n: number) => (n < 10 ? `0${n}` : String(n));
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function resolveAutoSyncTarget(): { lessonId: string; classId: string } | null {
+  if (autoSyncTarget?.lessonId) return autoSyncTarget;
+  const hostCtx = ctx?.context?.get?.();
+  return hostCtx?.lessonId ? { lessonId: hostCtx.lessonId, classId: hostCtx.classId || '' } : null;
+}
+
+function studentsInLesson(lessonId: string): string[] {
+  if (!latestPresence) return [];
+  const online = new Set(latestPresence.onlineStudentIds || []);
+  const map = latestPresence.activeStudentLessons || {};
+  return Object.keys(map).filter((sid) => map[sid] === lessonId && online.has(sid));
+}
+
+async function syncPresentFromPresence(force = false): Promise<void> {
+  const target = resolveAutoSyncTarget();
+  if (!ctx || !target || !latestPresence) return;
+  // presence 抖动频繁，非强制同步做最小 3s 节流
+  if (!force && Date.now() - lastSyncAt < 3000) return;
+
+  const date = todayStr();
+  const inLesson = studentsInLesson(target.lessonId);
+  const todo = force
+    ? inLesson
+    : inLesson.filter((sid) => !syncedKeys.has(`${target.lessonId}|${sid}|${date}`));
+  if (todo.length === 0) {
+    syncStats = { inLesson: inLesson.length, synced: inLesson.length, error: '' };
+    return;
+  }
+
+  lastSyncAt = Date.now();
+  try {
+    await invoke('attendance.sync_present', {
+      lessonId: target.lessonId,
+      classId: target.classId || undefined,
+      studentIds: todo,
+      date,
+    });
+    for (const sid of todo) syncedKeys.add(`${target.lessonId}|${sid}|${date}`);
+    syncStats = { inLesson: inLesson.length, synced: inLesson.length, error: '' };
+    syncListeners.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+  } catch (e: any) {
+    // 不静默吞错：面板与控制台都能看到，下次 presence 变更会自动重试
+    const msg = e?.message || String(e);
+    syncStats = { inLesson: inLesson.length, synced: syncStats.synced, error: msg };
+    console.warn('[attendance] 自动签到失败:', msg);
+    syncListeners.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+  }
+}
+
+function startPresenceAutoSync(): void {
+  const socketService = ctx?.services?.socketService;
+  if (!socketService?.on) return;
+  socketService.on('presence-update', (data: any) => {
+    if (!data) return;
+    latestPresence = {
+      onlineStudentIds: data.onlineStudentIds || [],
+      activeStudentLessons: data.activeStudentLessons || {},
+    };
+    syncPresentFromPresence(false);
+  });
+}
+
 const S = {
   muted: { color: '#9ca3af', fontSize: 12 },
   label: { fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 4 },
@@ -53,7 +136,8 @@ function StudentAttendanceRecorder(props: { lessonId?: string | null; classId?: 
   useEffect(() => {
     const lessonId = props.lessonId || null;
     const classId = props.classId || null;
-    const studentId = session?.studentId;
+    // 宿主 session 里学生 ID 可能是 userId，也可能只有旧字段 studentId
+    const studentId = session?.userId || session?.studentId;
     if (!lessonId || !studentId || session?.role !== 'student') {
       setStatus('skip');
       return;
@@ -582,6 +666,7 @@ function TeacherAttendancePanel() {
 function ClassroomAttendancePanel(props: { lessonId?: string | null; classId?: string | null }) {
   const [visible, setVisible] = useState(false);
   const [overview, setOverview] = useState<any>(null);
+  const [, setTick] = useState(0);
   const lessonId = props.lessonId || null;
   const classId = props.classId || null;
 
@@ -595,12 +680,29 @@ function ClassroomAttendancePanel(props: { lessonId?: string | null; classId?: s
 
   useEffect(() => { if (visible) load(); }, [visible, load]);
 
-  // 实时刷新：监听考勤事件
+  // 面板可见时轮询刷新：attendance.* 事件不会被宿主转发到 socket，只能主动拉取
   useEffect(() => {
-    if (!ctx?.services?.socketService) return;
-    const handler = () => { if (visible) load(); };
-    ctx.services.socketService.on('attendance.record_created', handler);
-    return () => { ctx.services.socketService.off('attendance.record_created', handler); };
+    if (!visible) return;
+    const timer = setInterval(load, 8000);
+    return () => clearInterval(timer);
+  }, [visible, load]);
+
+  // 自动签到器写库后立即刷新
+  useEffect(() => {
+    const handler = () => { setTick((t) => t + 1); if (visible) load(); };
+    syncListeners.add(handler);
+    return () => { syncListeners.delete(handler); };
+  }, [visible, load]);
+
+  // 把当前课堂（课件/班级）告知自动签到器，并在打开面板时用最新 presence 补记一次
+  useEffect(() => {
+    autoSyncTarget = lessonId ? { lessonId, classId: classId || '' } : null;
+    return () => { autoSyncTarget = null; };
+  }, [lessonId, classId]);
+
+  useEffect(() => {
+    if (!visible) return;
+    syncPresentFromPresence(true).then(() => load());
   }, [visible, load]);
 
   const toggle = () => setVisible((v) => !v);
@@ -662,6 +764,14 @@ function ClassroomAttendancePanel(props: { lessonId?: string | null; classId?: s
           ),
         ) : null,
       ),
+      React.createElement('div', { style: { marginTop: 12, paddingTop: 10, borderTop: '1px solid #f3f4f6', display: 'flex', alignItems: 'center', gap: 8 } },
+        React.createElement('span', { style: { ...S.muted, color: syncStats.error ? '#dc2626' : '#9ca3af' } },
+          syncStats.error ? `自动签到失败：${syncStats.error}` : `自动签到：在场 ${syncStats.inLesson} 人`),
+        React.createElement('button', {
+          onClick: async () => { await syncPresentFromPresence(true); load(); },
+          style: { ...S.btnGhost, padding: '3px 10px', fontSize: 12 },
+        }, '立即同步'),
+      ),
     ), document.body) : null;
 
   return React.createElement('div', null, btn, panel);
@@ -693,6 +803,16 @@ async function activate(hostCtx: any) {
     position: 60,
     group: 'management',
   });
+
+  // 教师/管理员端：订阅宿主 presence，把课堂在场学生自动记为已到
+  getSession()
+    .then((s) => {
+      const role = s?.role || s?.subRole;
+      if (role === 'teacher' || role === 'administrator' || role === 'admin') {
+        startPresenceAutoSync();
+      }
+    })
+    .catch(() => { /* 未登录时跳过 */ });
 
   // 教师端：课堂工具架实时考勤按钮（含缺勤名单）
   hostCtx.ui.registerExtensionPoint('classroom.tool', {
