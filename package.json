@@ -1,6 +1,6 @@
 {
   "name": "openlearn-plugin-attendance-record",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "学生上课考勤记录 - 学生进入课程自动记录年月日/星期/节次/课题/教师/机号/IP，教师端查看班级学期明细与汇总",

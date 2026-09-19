@@ -47,7 +47,7 @@ export default {
   manifest: {
     id: PLUGIN_ID,
     name: '课堂考勤记录',
-    version: '0.1.1',
+    version: '0.1.2',
     description: '学生进入课程时自动记录考勤（年月日/星期/节次/课题/教师/机号/IP），教师端查看班级学期明细与汇总',
     author: 'OpenLearn',
     // 推荐 inline 模式：本插件的定时任务（自动缺勤判定）依赖 processManager.registerInterval，

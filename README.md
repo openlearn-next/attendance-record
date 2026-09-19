@@ -44,6 +44,31 @@ npm run build
 
 平台后台：**系统设置 → 插件中心 → 上传插件** → 上传 zip → 激活。
 
+## ⚠️ 升级注意：重新上传会生成新的数据表
+
+在插件中心**重新上传 zip** 时，宿主会为插件分配一个**新的实例 UUID**，插件私有表也随之变成新名字：
+
+```
+plugin_<旧UUID>_attendance_logs   ← 旧实例的数据，插件不再读取
+plugin_<新UUID>_attendance_logs   ← 新实例的空表
+```
+
+也就是说，**升级后历史考勤记录不会自动迁移**，教师端明细/汇总会「看起来清空了」。旧表本身不会被删除，数据仍在数据库中。
+
+升级前请先备份，必要时手动迁移：
+
+```bash
+# 1. 升级前记录旧实例 ID（插件中心详情页或数据库）
+sqlite3 <宿主库> "SELECT id, name FROM plugins WHERE name = '课堂考勤记录'"
+sqlite3 <宿主库> ".dump plugin_<旧UUID>_attendance_logs" > attendance_backup.sql
+
+# 2. 升级后把旧数据插入新表（唯一键 (lesson_id, student_id, date) 保证幂等）
+sqlite3 <宿主库> "INSERT OR IGNORE INTO plugin_<新UUID>_attendance_logs
+                  SELECT * FROM plugin_<旧UUID>_attendance_logs"
+```
+
+> 若升级前旧表本来就没有任何记录（例如受 0.1.1 之前写入缺陷影响），可跳过迁移。
+
 ## ⚠️ 推荐使用 inline 执行模式
 
 本插件**强烈建议以 inline 模式运行**（宿主默认即 inline），原因：

@@ -1,7 +1,7 @@
 {
   "id": "@ext/attendance-record",
   "name": "课堂考勤记录",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "main": "index.js",
   "executionMode": "inline",
   "description": "学生进入课程时自动记录考勤（年月日/星期/节次/课题/教师/机号/IP），教师端查看班级学期明细与汇总",
