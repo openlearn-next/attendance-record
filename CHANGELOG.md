@@ -4,6 +4,12 @@
 
 ---
 
+## [0.1.3] - 2026-10-27
+
+### 🛠️ 变更 (Changes)
+
+- **manifest 补声明 `task:register` 能力**：本插件的自动缺勤判定依赖 `processManager.registerInterval` 注册周期任务。宿主平台的 method-policy 已对 `registerInterval`/`registerHandler` 施加 `task:register` 能力门禁（当前仅 worker 路径强制，inline 路径尚未接入）。本插件为 inline 模式暂不受影响，但为对齐宿主能力模型、避免 inline 门禁补齐后自动缺勤判定失效，预防性补声明。需管理员在审批 UI 确认授予。
+
 ## [0.1.1] - 2026-09-19
 
 ### 🐛 修复 (Bug Fixes)
